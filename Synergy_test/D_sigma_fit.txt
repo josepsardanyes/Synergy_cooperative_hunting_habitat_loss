@@ -1,0 +1,62 @@
+## Reading data for the RCP scenario
+##
+data=read.table("D_sigma_RCP_ar.txt")
+D=data$V1;sigma=data$V2;prob=data$V3
+
+## Probabilities equal to zero are replaced
+## by a very low value
+prob=ifelse(prob==0,0.0001,prob)
+## Variable y contains the logits
+y=log(prob/(1-prob))
+
+## Constructing the variables of the third-order bivariate
+## polynomial
+ 
+D2=D^2; sigma2=sigma^2; Dsigma=D*sigma
+D3=D^3; sigma3=sigma^3; D2sigma=D*D*sigma; Dsigma2=D*sigma*sigma
+D4=D^4;sigma4=sigma^4; D3sigma=D*D*D*sigma; Dsigma3=D*sigma*sigma*sigma
+D2sigma2=D*D*sigma*sigma
+
+## Fitting the complete model, a bivariate polynomial with 10 coefficients 
+fit=lm(y~ D + sigma + Dsigma + D2sigma + Dsigma2 + D2 + sigma2 + D3 + sigma3)
+
+## Appliying backward algorithm for eliminating non-significant coefficients
+model_backward <- step(fit, direction = "backward")
+## Final results, all variables are significant (p-value<0.05)
+summary(model_backward)
+
+
+## Reading data for the RC scenario
+##
+data=read.table("D_sigma_RC_ar.txt")
+D=data$V1;sigma=data$V2;prob=data$V3
+
+## Probabilities equal to zero are replaced
+## by a very low value
+prob=ifelse(prob==0,0.0001,prob)
+## Variable y contains the logits
+y=log(prob/(1-prob))
+
+## Constructing the variables of the third-order bivariate
+## polynomial
+ 
+D2=D^2; sigma2=sigma^2; Dsigma=D*sigma
+D3=D^3; sigma3=sigma^3; D2sigma=D*D*sigma; Dsigma2=D*sigma*sigma
+D4=D^4;sigma4=sigma^4; D3sigma=D*D*D*sigma; Dsigma3=D*sigma*sigma*sigma
+D2sigma2=D*D*sigma*sigma
+
+## Fitting the complete model, a bivariate polynomial with 10 coefficients 
+fit=lm(y~ D + sigma + Dsigma + D2sigma + Dsigma2 + D2 + sigma2 + D3 + sigma3)
+
+## Appliying backward algorithm for eliminating non-significant coefficients
+model_backward <- step(fit, direction = "backward")
+summary(model_backward)
+## In the resulting model the significant coefficients are those of the variables
+## D, sigma, D2sigma, Dsigma2, D2, sigma2 and D3, but the coefficient of sigma3
+## still remains non-significant (p-value= 0.1181). This variable is removed 
+## manually in the final model.
+
+## Final model 
+fit=lm(y~ D + sigma + D2sigma + Dsigma2 + D2 + sigma2 + D3)
+summary(fit)
+

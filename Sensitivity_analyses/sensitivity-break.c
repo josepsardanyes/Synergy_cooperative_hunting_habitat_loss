@@ -1,0 +1,339 @@
+/*
+  gcc -o sensitivity-break sensitivity-break.c -lm -Wall -O3
+  
+*/
+
+
+#define _GNU_SOURCE
+#include<stdio.h>
+#include<stdlib.h>
+#include<math.h>
+#include<unistd.h>
+#include<time.h>
+
+/*=====================================================================\
+|     funcio per a resoldre e.d.o. pel metode Runge-Kutta-Fehlberg     |
+|                           d'ordres 7 i 8                             |
+|----------------------------------------------------------------------|
+|                                                                      |
+|   double rk78 ( *at, e, x[], *ah, tol, hmin, hmax, n, deriv )        |
+|                                                                      |
+|     at          punter a la variable TEMPS                           |
+|     e           parametre de la familia de camps                     |
+|     x[]         vector POSICIO                                       |
+|     ah          punter a la variable PAS                             |
+|     tol         TOLERANCIA                                           |
+|     hmin, hmax  PAS minim i maxim                                    |
+|     n           dimensio                                             |
+|     deriv       punter a la funcio que conte el CAMP i que ha de ser:|
+|                                                                      |
+|                 int camp ( t, e, x[], dx[])                          |
+|                                                                      |
+|  ?? retorna una estimacio de l'ERROR comes o -1 si hem donat n>DIMAX |
+|     i at,x[],ah tornen preparades per al seguent pas.                |
+|                                                                      |
+\=====================================================================*/
+
+#include <math.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+#define DIMAX 200  /* ??? 1000-->200 */
+
+#define MAX(a,b) ((a)<(b) ? (b) : (a))
+#define sgn(a)   ((a)<0 ? -1 : 1 ) 
+
+//stepsize max i min
+#define HMAX 0.1
+#define HMIN 0.00001
+
+#define dim 3 //numero d'EDOs
+
+//const double time_f = 5e4;
+const double time_f = 30000.0;
+const int ITERS = 1e6;
+const double norm = 1.e6;
+
+//***********************************************************
+static double alfa[ 13 ] =
+   {           0.,      2./ 27.,       1./ 9.,       1./ 6.,
+          5./ 12.,          .5 ,       5./ 6.,       1./ 6.,
+           2./ 3.,       1./ 3.,           1.,           0.,
+               1.};
+
+static double beta[ 79 ] =
+   {           0.,      2./ 27.,      1./ 36.,      1./ 12.,
+          1./ 24.,           0.,       1./ 8.,       5./12.,
+               0.,   - 25./ 16.,     25./ 16.,       .5e-1 ,
+               0.,           0.,         .25 ,          .2 ,
+      - 25./ 108.,           0.,           0.,   125./ 108.,
+       - 65./ 27.,    125./ 54.,    31./ 300.,           0.,
+               0.,           0.,    61./ 225.,     - 2./ 9.,
+        13./ 900.,           2.,           0.,           0.,
+        - 53./ 6.,    704./ 45.,   - 107./ 9.,     67./ 90.,
+               3.,  - 91./ 108.,           0.,           0.,
+        23./ 108., - 976./ 135.,    311./ 54.,   - 19./ 60.,
+          17./ 6.,    - 1./ 12., 2383./ 4100.,           0.,
+               0., - 341./ 164., 4496./ 1025.,  - 301./ 82.,
+     2133./ 4100.,     45./ 82.,    45./ 164.,     18./ 41.,
+         3./ 205.,           0.,           0.,           0.,
+               0.,    - 6./ 41.,   - 3./ 205.,    - 3./ 41.,
+          3./ 41.,      6./ 41.,           0.,-1777./ 4100.,
+               0.,           0., - 341./ 164., 4496./ 1025.,
+      - 289./ 82.,  2193./4100.,     51./ 82.,    33./ 164.,
+         12./ 41.,           0.,           1.};
+
+static double c7[ 11 ] =
+   {    41./ 840.,           0.,           0.,           0.,
+               0.,    34./ 105.,      9./ 35.,      9./ 35.,
+         9./ 280.,     9./ 280.,    41./ 840.};
+
+static double c8[ 13 ] =
+   {           0.,           0.,           0.,           0.,
+               0.,    34./ 105.,      9./ 35.,      9./ 35.,
+         9./ 280.,     9./ 280.,           0.,    41./ 840.,
+       41./ 840.};
+//***********************************************************
+
+/**********************************************************************
+|           Field: differential equations
+***********************************************************************/
+void var0( double t, double e[], double x[], double xm[], double D, double sig) //double parms[15]
+{
+
+ 
+  //e[0]: x_c
+  //e[1]: y_c
+  //e[2]: R_0
+  //e[3]: x_p
+  //e[4]: x_i
+  //e[5]: y_p
+  //e[6]: C_0
+ 
+
+  double Phi = e[3]*(1. - sig)*x[2] + e[4]*sig*x[2]*x[2]; //OK
+    
+  //RESOURCE (R)
+  xm[0] = x[0]*(1. - D - x[0]) - (e[0]*e[1]*x[0]*x[1])/(x[0] + e[2]); //OK
+
+  //CONSUMER (C)
+  xm[1] = e[0]*x[1]*(((e[1]*x[0])/(x[0] + e[2])) - 1.0) - Phi*((e[5]*x[1])/(x[1] + e[6]));  //OK
+
+  //PREDATOR (P)
+  xm[2] = Phi*((e[5]*x[1])/(x[1] + e[6])) - e[3]*x[2];
+}
+
+
+//******RUNGE-KUTTA-FEHLBERG 78, automatic time stepsize *************************
+void rk78 (at, e, x, ah, tol, hmin, hmax, n, deriv,D,sigma )
+  double *at, *e, *x, *ah, tol, hmin, hmax, D, sigma; //ULL AQUI !!!!!!
+     int n;
+void (*deriv) ( double, double[], double[ ], double[ ], double, double );
+{
+  
+  double tpon, tol1,  err, nor, kh, beth, h1, k [DIMAX][13] ,
+    x7 [DIMAX], x8 [DIMAX], xpon [DIMAX], dx [DIMAX];
+  register int j, l;
+  int i, m;
+  
+  if( n > DIMAX ) {
+    printf( "system's dimension too large" );
+    exit( 1 );
+  }
+  do {
+    /*
+      ----------------> Computation of  K(i,j) <---------------------
+    */
+    m = 0;
+    for( i=0; i<13; ++i ) {
+      tpon = *at + alfa[i] * *ah;
+      for( j=0; j<n; xpon[j]=x[j], ++j );
+      for( l=0; l<i; ++l ) {
+	m++;
+	beth = *ah * beta[m];
+          for ( j=0; j<n; xpon[j] += beth * k[j][l], ++j );
+      }
+      ( *deriv )( tpon, e, xpon, dx , D, sigma);
+      for( j=0; j<n; k[j][i] = dx[j], j++ );
+    }
+    /*
+      -------> Computation of the 2 points and associated values <-------------
+    */
+    err = nor = 0;
+    for( j=0; j<n; j++ ) {
+      x7[j] = x8[j] = x[j];
+      for( l=0; l<11; ++l ) {
+	kh = *ah * k[j][l];
+	x7[j] += kh * c7[l];
+	x8[j] += kh * c8[l];
+      }
+      x8[j] += *ah * ( c8[11] * k[j][11] + c8[12] * k[j][12] );
+      err += fabs ( x8[j] - x7[j] );
+      nor += fabs ( x8[j] );
+    }
+    err /= n;
+    /*
+      ----------------> Computation of new step h  <---------------------
+    */
+    tol1 = tol * ( 1 + nor / 100 );
+    if( err < tol1 )
+      err = MAX( err, tol1 / 256 );
+    h1 = *ah;
+    *ah *= 0.9 * pow ( tol1 / err, 0.125 );
+    if( fabs ( *ah ) < hmin )
+       *ah = hmin * sgn ( *ah );
+    if( fabs ( *ah ) > hmax )
+      *ah = hmax * sgn ( *ah );
+ } while (( err >= tol1 ) && ( fabs ( *ah ) > hmin ));
+  
+  *at += h1;
+  for( j=0; j<n; x[j]=x8[j], j++ );
+  
+}
+//********************************************************************************
+
+double randomDouble(double min, double max)
+{
+    double lowerRange = min;
+    double upperRange = max;
+    return ((double)rand() * (upperRange - lowerRange)) / (double)RAND_MAX + lowerRange;
+}
+
+int main()
+{
+  long int seed=-1;
+  srand48(seed==-1 ? (long)(time(0)+getpid()):seed);
+  srand(-time(NULL));
+  
+  double x[dim];
+
+  FILE *frcp = fopen("D_sigma_RCP1e7_D1.txt","w");
+   FILE *frc = fopen("D_sigma_RC1e7_D1.txt","w");
+    FILE *fr = fopen("D_sigma_R1e7_D1.txt","w");
+    FILE *f0 = fopen("D_sigma_01e7_D1.txt","w");    
+   
+  double e[7];
+  //parametres*********
+  //e[0]: x_c
+  //e[1]: y_c
+  //e[2]: R_0
+  //e[3]: x_p
+  //e[4]: x_i
+  //e[5]: y_p
+  //e[6]: C_0
+  //******************
+ 
+  double time = .0;
+  double pas;
+  double eps = 1e-15; //tolerancia:error que tolerem
+  
+  double hmax, hmin;
+  hmax= HMAX;
+  hmin = HMIN;
+
+  //Scenarios
+  /*RCP*/ double num_RCP;
+  /*RC*/  double num_RC; 
+  /*R*/   double num_R;
+  /*000*/ double num_0;
+  
+  for(double j=.9;j<1.;j+=.1)    //bucle D
+    {  
+      for(double k=.0;k<=1.;k+=.1)  //bucle sigma
+	{
+	  printf("D = %.1lf, sigma = %.1lf\n",j,k);
+	  
+	  num_RCP = .0;
+	  num_RC = .0; 
+	  num_R = .0;
+	  num_0 = .0;
+	  
+	  //bucle iterations vector parameters
+	  for(int ii=0;ii<ITERS;ii+=1.0)
+	    {
+	      time = .0;
+	      if(ii%25000 == 0) printf("ITER = %d\n",ii); 
+	      //parameters
+	      e[0] = randomDouble(1e-3,5.0);
+	      e[1] = randomDouble(1e-3,5.0);
+	      e[2] = randomDouble(1e-3,5.0);
+	      e[3] = randomDouble(1e-3,5.0);
+	      e[4] = randomDouble(1e-3,5.0);
+	      e[5] = randomDouble(1e-3,5.0);
+	      e[6] = randomDouble(1e-3,5.0);
+	      
+	      //ics
+	      x[0] = randomDouble(0.1,1.0);
+	      x[1] = randomDouble(0.1,1.0);
+	      x[2] = randomDouble(0.1,1.0);
+
+	      /* printf("x_c = %.8lf\n", e[0]);
+	      printf("y_c = %.8lf\n", e[1]);
+	      printf("R_0 = %.8lf\n", e[2]);
+	      printf("x_p = %.8lf\n", e[3]);
+	      printf("x_i = %.8lf\n", e[4]);
+	      printf("y_p = %.8lf\n", e[5]);
+	      printf("C_0 = %.8lf\n", e[6]);
+	      printf("R(0) = %.8lf\n", x[0]);
+	      printf("C(0) = %.8lf\n", x[1]);
+	      printf("P(0) = %.8lf\n", x[2]);*/
+	      
+	      do    
+		{
+		  rk78(&time,e,x,&pas,eps,hmin,hmax,dim,var0,j,k);
+  		  
+		  for(int i=0;i<dim;i++)
+		    if(x[i]<=1e-8)
+		      x[i]=.0;
+		  
+		  
+		  if(x[0]<=1e-8 && x[1] <= 1e-8 && x[2] <=1e-8)
+		     {
+		       num_0+=1.0;
+		       break;
+		     }
+		} while(time<time_f);
+
+	      printf("x_c = %.8lf\n", e[0]);
+	      printf("y_c = %.8lf\n", e[1]);
+	      printf("R_0 = %.8lf\n", e[2]);
+	      printf("x_p = %.8lf\n", e[3]);
+	      printf("x_i = %.8lf\n", e[4]);
+	      printf("y_p = %.8lf\n", e[5]);
+	      printf("C_0 = %.8lf\n", e[6]);
+
+	      printf("R = %.8lf   C = %.8lf   P = %.8lf\n",x[0],x[1],x[2]);
+	      //printf("R = %.8lf   C = %.8lf   P = %.8lf\n",x[0],x[1],x[2]);
+	      
+	           if(x[0] > 1e-8 && x[1] > 1e-8 && x[2] > 1e-8) num_RCP+=1.0;
+	      else if(x[0] > 1e-8 && x[1] > 1e-8 && x[2] <= 1e-8) num_RC+=1.0;
+	      else if(x[0] >= 0.05 && x[1] <= 1e-8 && x[2] <= 1e-8) num_R+=1.0;
+	     
+	      
+	      if(ii%1 ==0)
+		{
+		  printf("num_R=%.1lf | num_RC=%.1lf | num_RCP=%.1lf | num_0=%.1lf\n",num_R,num_RC,num_RCP,num_0);
+		  printf("\n");
+		} 
+	    }
+	  fprintf(frcp,"%.1lf %.1lf %.3lf\n",j,k,num_RCP/norm);
+	  fprintf(frc,"%.1lf %.1lf %.3lf\n",j,k,num_RC/norm);
+	  fprintf(fr,"%.1lf %.1lf %.3lf\n",j,k,num_R/norm);
+	  fprintf(f0,"%.1lf %.1lf %.3lf\n",j,k,num_0/norm);
+
+	  fflush(frcp);  fflush(frc);  fflush(fr);   fflush(f0);
+
+	  printf("Prob(RCP) = %.3lf\n",num_RCP/norm);
+	  printf("Prob(RC) = %.3lf\n",num_RC/norm);
+	  printf("Prob(R) = %.3lf\n",num_R/norm);
+	  printf("Prob(0) = %.3lf\n",num_0/norm);
+	}
+    }  
+ 
+  
+  fclose(frcp);    fclose(frc);    fclose(fr);     fclose(f0);
+
+  return(0);
+       
+       
+}
